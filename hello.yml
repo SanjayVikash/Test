@@ -1,0 +1,26 @@
+---
+- name: Create a new sudo user
+  hosts: linux
+  become: true
+  vars:
+    new_username: "ansible"
+    # Generate a hashed password using: mkpasswd -m sha-512
+    # This is a dummy hash for 'changeme'
+    new_password: "$6$cpY6E2q37DtZnxFO$UBkEPCXLlg232dGOtla0yuOwhb5kYuI6YW2iiDXSVt/30BPeHxUUNedv67a7tLy1fr44RMMZ1yvh8J/t/HwW8."
+
+  tasks:
+    - name: Create the user account
+      user:
+        name: "{{ new_username }}"
+        password: "{{ new_password }}"
+        shell: /bin/bash
+        groups: sudo
+        append: yes
+        state: present
+
+    - name: Allow the new user to use sudo without a password (optional)
+      copy:
+        content: "{{ new_username }} ALL=(ALL) NOPASSWD:ALL"
+        dest: "/etc/sudoers.d/{{ new_username }}"
+        mode: '0440'
+        validate: 'visudo -cf %s'
