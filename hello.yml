@@ -1,20 +1,165 @@
 ---
-- name: Create a new sudo user
-  hosts: linux
-  become: true
+- name: CCDC Linux Hardening - OpenCart & MySQL Focus
+  hosts: all
+  become: yes
   vars:
-    new_username: "ansible"
-    # Generate a hashed password using: mkpasswd -m sha-512
-    # This is a dummy hash for 'changeme'
-    new_password: "$6$cpY6E2q37DtZnxFO$UBkEPCXLlg232dGOtla0yuOwhb5kYuI6YW2iiDXSVt/30BPeHxUUNedv67a7tLy1fr44RMMZ1yvh8J/t/HwW8."
+    new_admin_user: "Testuser"
+    new_admin_password: "Password123" # In production, use ansible-vault for this!
+    opencart_root: "/var/www/html"
+    scoring_ports:
+      - 22
+      - 80
+      - 443
+      - 3306
 
   tasks:
-    - name: Create the user account
-      user:
-        name: "{{ new_username }}"
-        password: "{{ new_password }}"
+    # --- 1) IDENTITY & ACCESS ---
+    - name: Create the designated admin user
+      ansible.builtin.user:
+        name: "{{ new_admin_user }}"
+        password: "{{ new_admin_password | password_hash('sha512') }}"
         shell: /bin/bash
-        groups: sudo
+        groups: "{{ 'wheel' if ansible_os_family == 'RedHat' else 'sudo' }}"
         append: yes
+
+    # --- 2) SSH HARDENING ---
+    - name: Configure SSH Daemon (Hardened Ciphers and Root Lockdown)
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+      loop:
+        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
+        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication yes' }
+        - { regexp: '^#?AllowUsers', line: 'AllowUsers {{ new_admin_user }}' }
+      notify: Restart SSH
+
+    - name: Enforce Modern SSH Ciphers and Kex
+      ansible.builtin.blockinfile:
+        path: /etc/ssh/sshd_config
+        block: |
+          KexAlgorithms curve25519-sha256@libssh.org
+          Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com
+          MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+      notify: Restart SSH
+
+    # --- 3) MYSQL HARDENING ---
+    # Note: Requires python3-pymysql or equivalent on the target host
+    - name: Install MySQL/MariaDB Python support
+      ansible.builtin.package:
+        name: "{{ 'python3-pymysql' if ansible_os_family == 'Debian' else 'python3-mysql' }}"
         state: present
 
+    - name: Remove anonymous MySQL users
+      community.mysql.mysql_user:
+        name: ""
+        host_all: yes
+        state: absent
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+
+    - name: Secure Root user (Local access only)
+      community.mysql.mysql_user:
+        name: root
+        host: "{{ item }}"
+        state: present
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+      loop: ['127.0.0.1', '::1', 'localhost']
+
+    - name: Remove MySQL test database
+      community.mysql.mysql_db:
+        name: test
+        state: absent
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+
+    # --- 4) OPENCART FILESYSTEM HARDENING ---
+    - name: Nuke the OpenCart 'install' directory
+      ansible.builtin.file:
+        path: "{{ opencart_root }}/install"
+        state: absent
+
+    - name: Set config.php files to read-only (444)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        mode: '0444'
+      loop:
+        - "{{ opencart_root }}/config.php"
+        - "{{ opencart_root }}/admin/config.php"
+      ignore_errors: yes
+
+    - name: Set directory permissions (755)
+      ansible.builtin.command:
+        cmd: "find {{ opencart_root }} -type d -exec chmod 755 {} +"
+      changed_when: false
+
+    - name: Set file permissions (644)
+      ansible.builtin.command:
+        cmd: "find {{ opencart_root }} -type f -exec chmod 644 {} +"
+      changed_when: false
+
+    # --- 5) NETWORK HARDENING (SYSCTL) ---
+    - name: Apply sysctl security tweaks
+      ansible.posix.sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        state: present
+        reload: yes
+      loop:
+        - { key: 'net.ipv4.conf.all.rp_filter', value: '1' }
+        - { key: 'net.ipv4.tcp_syncookies', value: '1' }
+        - { key: 'net.ipv4.conf.all.accept_redirects', value: '0' }
+        - { key: 'kernel.dmesg_restrict', value: '1' }
+
+    # --- 6) FIREWALL CONFIGURATION ---
+    - name: Allow scoring ports (UFW - Debian/Ubuntu)
+      community.general.ufw:
+        rule: allow
+        port: "{{ item | string }}"
+        proto: tcp
+      loop: "{{ scoring_ports }}"
+      when: ansible_os_family == "Debian"
+
+    - name: Enable UFW and Deny by Default
+      community.general.ufw:
+        state: enabled
+        direction: incoming
+        policy: deny
+      when: ansible_os_family == "Debian"
+
+    # --- 7) MONITORING (FAIL2BAN) ---
+    - name: Ensure Fail2Ban is installed and active
+      ansible.builtin.package:
+        name: fail2ban
+        state: present
+
+    - name: Configure Fail2Ban Jail for SSH and MySQL
+      ansible.builtin.copy:
+        dest: /etc/fail2ban/jail.local
+        content: |
+          [DEFAULT]
+          bantime = 1h
+          maxretry = 5
+          [sshd]
+          enabled = true
+          [mysql-auth]
+          enabled = true
+          port = 3306
+          logpath = /var/log/mysql/error.log
+      notify: Restart Fail2Ban
+
+    # --- 8) LEGAL BANNER ---
+    - name: Set MOTD
+      ansible.builtin.copy:
+        dest: /etc/motd
+        content: "UNAUTHORIZED ACCESS PROHIBITED. ACTIVITY IS MONITORED."
+
+  handlers:
+    - name: Restart SSH
+      ansible.builtin.service:
+        name: "{{ 'ssh' if ansible_os_family == 'Debian' else 'sshd' }}"
+        state: restarted
+
+    - name: Restart Fail2Ban
+      ansible.builtin.service:
+        name: fail2ban
+        state: restarted
