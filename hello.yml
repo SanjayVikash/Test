@@ -5,7 +5,7 @@
   vars:
     new_admin_user: "Testuser"
     new_admin_password: "Password123" # In production, use ansible-vault for this!
-    opencart_root: "/var/www/html"
+    opencart_root: "/var/www/opencart"
     scoring_ports:
       - 22
       - 80

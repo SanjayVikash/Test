@@ -1,0 +1,21 @@
+---
+- name: Create specific files for specific hosts
+  hosts: linux
+  tasks:
+    - name: Create shop file for ecomm
+      ansible.builtin.copy:
+        content: "Welcome to the shop"
+        dest: "~/shop.txt"
+      when: inventory_hostname == '172.20.242.30' # Use the name/IP in your hosts.ini
+
+    - name: Create mail file for mail-server
+      ansible.builtin.copy:
+        content: "You have mail"
+        dest: "~/mail.txt"
+      when: inventory_hostname == '172.20.242.40'
+
+    - name: Create cookie file for splunk
+      ansible.builtin.copy:
+        content: "Here is your cookie"
+        dest: "~/cookie.txt"
+      when: inventory_hostname == '172.20.242.20'
