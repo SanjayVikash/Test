@@ -1,34 +1,31 @@
 ---
-- name: Create Pikachu User Across Different OS Families
+- name: Create Pikachu User Across Linux and VyOS 1.4.3
   hosts: linux_hosts
-  # 'become' is required for Linux but handled differently for VyOS
-  become: "{{ false if ansible_network_os is defined else true }}"
+  gather_facts: yes
+  
   tasks:
-    # --- LINUX HOSTS (Ubuntu, Fedora, Oracle) ---
-    - name: Ensure the sudo group exists (RedHat/Fedora/Oracle use 'wheel')
-      ansible.builtin.group:
-        name: "{{ 'wheel' if ansible_os_family in ['RedHat', 'Oracle Linux'] else 'sudo' }}"
-        state: present
-      when: ansible_network_os is not defined
-
-    - name: Create Pikachu on Linux machines
+    # --- SECTION 1: LINUX HOSTS (Ubuntu, Fedora, Oracle) ---
+    - name: Create Pikachu user on Linux distributions
       ansible.builtin.user:
         name: Pikachu
-        # Generates a hashed version of 'changeme'
+        # Password 'changeme' hashed for Linux security
         password: "{{ 'changeme' | password_hash('sha512') }}"
         shell: /bin/bash
-        # Adds user to the correct admin group for that OS
+        # Dynamic group selection: 'wheel' for RedHat/Oracle, 'sudo' for others
         groups: "{{ 'wheel' if ansible_os_family in ['RedHat', 'Oracle Linux'] else 'sudo' }}"
         append: yes
         state: present
+      become: yes
+      # Only runs if the host is NOT a network device
       when: ansible_network_os is not defined
 
-# --- VyOS Task using Raw Config ---
-    - name: Create Pikachu on VyOS using raw commands
+    # --- SECTION 2: VyOS 1.4.3 (Sagitta Syntax) ---
+    - name: Configure Pikachu user on VyOS
       vyos.vyos.vyos_config:
         lines:
           - set system login user Pikachu full-name "Pikachu Admin"
           - set system login user Pikachu authentication plaintext-password "changeme"
-          # We send 15 because we know the router accepts it, and this module won't block us
-          - set system login user Pikachu level 15
+          # VyOS 1.4+ uses 'role admin' instead of 'level 15'
+          - set system login user Pikachu role admin
+      # Only runs if the host is specifically in the vyos group
       when: "'vyos' in group_names"
