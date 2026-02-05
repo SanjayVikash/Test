@@ -1,0 +1,28 @@
+---
+- name: Create Pikachu Admin User
+  hosts: linux_hosts
+  become: yes
+  vars:
+    new_user: "Pikachu"
+    # Note: Use 'ansible-vault' to encrypt this in production!
+    new_password: "changeme"
+
+  tasks:
+    - name: Create the Pikachu user
+      ansible.builtin.user:
+        name: "{{ new_user }}"
+        # Password must be hashed for the user module
+        password: "{{ new_password | password_hash('sha512') }}"
+        shell: /bin/bash
+        # Ubuntu uses 'sudo', Fedora/Oracle use 'wheel'
+        groups: "{{ 'sudo' if ansible_os_family == 'Debian' else 'wheel' }}"
+        append: yes
+        state: present
+
+    - name: Ensure Pikachu can use sudo without a password (optional for lab)
+      ansible.builtin.lineinfile:
+        path: /etc/sudoers.d/pikachu
+        line: "Pikachu ALL=(ALL) NOPASSWD:ALL"
+        create: yes
+        mode: '0440'
+        validate: '/usr/sbin/visudo -cf %s'
