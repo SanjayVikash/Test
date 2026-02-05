@@ -1,20 +1,34 @@
 ---
-- name: Create Pikachu Admin User
+- name: Create Pikachu User Across Different OS Families
   hosts: linux_hosts
-  become: yes
-  vars:
-    new_user: "Pikachu"
-    # Note: Use 'ansible-vault' to encrypt this in production!
-    new_password: "changeme"
-
+  # 'become' is required for Linux but handled differently for VyOS
+  become: "{{ false if ansible_network_os is defined else true }}"
   tasks:
-    - name: Create the Pikachu user
+    # --- LINUX HOSTS (Ubuntu, Fedora, Oracle) ---
+    - name: Ensure the sudo group exists (RedHat/Fedora/Oracle use 'wheel')
+      ansible.builtin.group:
+        name: "{{ 'wheel' if ansible_os_family in ['RedHat', 'Oracle Linux'] else 'sudo' }}"
+        state: present
+      when: ansible_network_os is not defined
+
+    - name: Create Pikachu on Linux machines
       ansible.builtin.user:
-        name: "{{ new_user }}"
-        # Password must be hashed for the user module
-        password: "{{ new_password | password_hash('sha512') }}"
+        name: Pikachu
+        # Generates a hashed version of 'changeme'
+        password: "{{ 'changeme' | password_hash('sha512') }}"
         shell: /bin/bash
-        # Ubuntu uses 'sudo', Fedora/Oracle use 'wheel'
-        groups: "{{ 'sudo' if ansible_os_family == 'Debian' else 'wheel' }}"
+        # Adds user to the correct admin group for that OS
+        groups: "{{ 'wheel' if ansible_os_family in ['RedHat', 'Oracle Linux'] else 'sudo' }}"
         append: yes
         state: present
+      when: ansible_network_os is not defined
+
+    # --- NETWORK HOST (VyOS) ---
+    - name: Create Pikachu on VyOS
+      vyos.vyos.vyos_user:
+        name: Pikachu
+        full_name: "Pikachu Admin"
+        level: admin
+        password: "changeme"
+        state: present
+      when: ansible_network_os is defined and ansible_network_os == 'vyos.vyos.vyos'
