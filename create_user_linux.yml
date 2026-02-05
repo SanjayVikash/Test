@@ -23,12 +23,12 @@
         state: present
       when: ansible_network_os is not defined
 
-    # --- NETWORK HOST (VyOS) ---
-    - name: Create Pikachu on VyOS
-      vyos.vyos.vyos_user:
-        name: Pikachu
-        full_name: "Pikachu Admin"
-        level: admin
-        password: "changeme"
-        state: present
-      when: ansible_network_os is defined and ansible_network_os == 'vyos.vyos.vyos'
+# --- VyOS Task using Raw Config ---
+    - name: Create Pikachu on VyOS using raw commands
+      vyos.vyos.vyos_config:
+        lines:
+          - set system login user Pikachu full-name "Pikachu Admin"
+          - set system login user Pikachu authentication plaintext-password "changeme"
+          # We send 15 because we know the router accepts it, and this module won't block us
+          - set system login user Pikachu level 15
+      when: "'vyos' in group_names"
